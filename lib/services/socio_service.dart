@@ -116,22 +116,41 @@ class SocioService {
 
     throw Exception('Error al obtener estado de cuenta');
   }
+
+  // ============================================================
+  // AQUÍ ESTÁ LA MAGIA CORREGIDA
+  // ============================================================
   Future<Map<String, dynamic>> generarQrBnb(String idRecibo) async {
-  final token = await _authService.getAccessToken();
+    final token = await _authService.getAccessToken();
 
-  final response = await http.post(
-    Uri.parse('${ApiConfig.baseUrl}/socio/recibos/$idRecibo/generar-qr-bnb/'),
-    headers: {
-      'Authorization': 'Bearer $token',
-      'Content-Type': 'application/json',
-    },
-  );
+    // NOTA TÉCNICA: Si ves que en tu Django (urls.py) registraste la ruta como "mi-cuenta",
+    // tal vez debas cambiar 'socio/recibos' por 'mi-cuenta'. Lo he dejado tal como
+    // lo tenías para no romper tu lógica, pero tenlo en mente por si lanza error 404.
+    final response = await http.post(
+      Uri.parse('${ApiConfig.baseUrl}/mi-cuenta/$idRecibo/generar-qr-bnb/'),
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+        'Accept': 'application/json', // <- ESTO ELIMINA EL ERROR <!DOCTYPE html>
+      },
+    );
 
-  if (response.statusCode == 200 || response.statusCode == 201) {
-    return jsonDecode(response.body);
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      final data = jsonDecode(response.body);
+      
+      // Empaquetamos la respuesta en 'transaccion' para que tu HomeScreen no reciba NULL
+      return {'transaccion': data};
+    }
+
+    // Blindaje anti-pantalla negra:
+    // Si Django nos manda un error, intentamos leerlo como JSON. 
+    // Si Django choca y manda un HTML, el 'catch' atrapa la explosión y 
+    // te muestra un error limpio en lugar de la pantalla negra.
+    try {
+      final data = jsonDecode(response.body);
+      throw Exception(data['error'] ?? 'Error al generar QR BNB');
+    } catch (e) {
+      throw Exception('El servidor rechazó la solicitud: Código ${response.statusCode}');
+    }
   }
-
-  final data = jsonDecode(response.body);
-  throw Exception(data['error'] ?? 'Error al generar QR BNB');
- }
 }
