@@ -1,16 +1,19 @@
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:http/http.dart' as http;
+import 'package:image_gallery_saver/image_gallery_saver.dart';
 import '../services/socio_service.dart';
 
 class QrPagoScreen extends StatefulWidget {
   final Map<String, dynamic> transaccion;
-  final String idRecibo; // Necesitamos el ID para enviar la foto
+  final String idRecibo;
 
   const QrPagoScreen({
     super.key,
     required this.transaccion,
-    required this.idRecibo, // Asegúrate de pasarlo desde la pantalla anterior
+    required this.idRecibo,
   });
 
   @override
@@ -20,11 +23,84 @@ class QrPagoScreen extends StatefulWidget {
 class _QrPagoScreenState extends State<QrPagoScreen> {
   final SocioService _socioService = SocioService();
   bool _procesando = false;
+  bool _descargando = false;
 
+  // ==========================================
+  // NUEVA FUNCIÓN: Traductor de Meses
+  // ==========================================
+  String _formatearMes(String periodo) {
+    if (periodo.isEmpty || !periodo.contains('-')) return periodo;
+    try {
+      final partes = periodo.split('-');
+      final anio = partes[0];
+      final mesNumero = int.parse(partes[1]);
+      
+      const meses = [
+        'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 
+        'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
+      ];
+
+      if (mesNumero >= 1 && mesNumero <= 12) {
+        return '${meses[mesNumero - 1]} $anio'; // Ejemplo: Mayo 2026
+      }
+    } catch (e) {
+      return periodo; // Si algo falla, devuelve el original por seguridad
+    }
+    return periodo;
+  }
+
+  // ==========================================
+  // FUNCIÓN: Descargar QR a la galería
+  // ==========================================
+  Future<void> _descargarQR(String url) async {
+    if (url.isEmpty) return;
+    
+    setState(() => _descargando = true);
+    try {
+      var response = await http.get(Uri.parse(url));
+      final result = await ImageGallerySaver.saveImage(
+        Uint8List.fromList(response.bodyBytes),
+        quality: 100,
+        name: "QR_Agua_${widget.idRecibo}",
+      );
+
+      if (!mounted) return;
+
+      if (result['isSuccess'] == true) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.download_done, color: Colors.white),
+                SizedBox(width: 10),
+                Text("QR guardado en tu galería"),
+              ],
+            ),
+            backgroundColor: Colors.green,
+          ),
+        );
+      } else {
+        throw Exception("No se pudo guardar la imagen");
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Error al descargar el QR. Verifica tus permisos."),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _descargando = false);
+    }
+  }
+
+  // ==========================================
+  // FUNCIÓN: Escanear y subir comprobante
+  // ==========================================
   Future<void> _escanearComprobante() async {
     final ImagePicker picker = ImagePicker();
     
-    // Abrimos un menú inferior para que elija Cámara o Galería
     showModalBottomSheet(
       context: context,
       builder: (BuildContext bc) {
@@ -57,20 +133,17 @@ class _QrPagoScreenState extends State<QrPagoScreen> {
     try {
       final XFile? foto = await picker.pickImage(
         source: source,
-        imageQuality: 70, // Comprimimos un poco para no saturar el servidor
+        imageQuality: 70,
       );
 
       if (foto != null) {
         setState(() => _procesando = true);
-        
         File imagenFile = File(foto.path);
         
-        // Enviamos la foto al servidor Django
         final respuesta = await _socioService.validarPagoOcr(widget.idRecibo, imagenFile);
         
         if (!mounted) return;
         
-        // ¡ÉXITO!
         showDialog(
           context: context,
           barrierDismissible: false,
@@ -86,8 +159,8 @@ class _QrPagoScreenState extends State<QrPagoScreen> {
             actions: [
               TextButton(
                 onPressed: () {
-                  Navigator.pop(context); // Cierra modal
-                  Navigator.pop(context, true); // Regresa y avisa que ya se pagó
+                  Navigator.pop(context);
+                  Navigator.pop(context, true);
                 },
                 child: const Text("Aceptar", style: TextStyle(color: Colors.green)),
               )
@@ -117,12 +190,13 @@ class _QrPagoScreenState extends State<QrPagoScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Ahora tomamos la URL del enlace directo
     final String qrUrl = widget.transaccion['qr_image_url']?.toString() ?? '';
-    final String referencia = widget.transaccion['referencia']?.toString() ?? '—';
     final String monto = widget.transaccion['monto']?.toString() ?? '0.00';
     final String estado = widget.transaccion['estado']?.toString() ?? 'Generado';
-    final String periodo = widget.transaccion['periodo_nombre']?.toString() ?? '';
+    
+    // Obtenemos el periodo original (ej. 2026-05) y lo convertimos
+    final String periodoBruto = widget.transaccion['periodo_nombre']?.toString() ?? '';
+    final String periodoFormateado = _formatearMes(periodoBruto);
 
     return Scaffold(
       appBar: AppBar(
@@ -134,93 +208,110 @@ class _QrPagoScreenState extends State<QrPagoScreen> {
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 480),
             child: Card(
-              elevation: 3,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(18),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(22),
-                child: Column(
-                  children: [
-                    const Icon(Icons.qr_code_2, size: 60, color: Color(0xFF0D6EFD)),
-                    const SizedBox(height: 10),
-                    const Text('Escanea este QR para pagar', style: TextStyle(fontSize: 21, fontWeight: FontWeight.w800), textAlign: TextAlign.center),
-                    const SizedBox(height: 6),
-                    Text(periodo, style: const TextStyle(color: Colors.black54)),
-                    const SizedBox(height: 22),
-
-                    Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(18),
-                        border: Border.all(color: Colors.black12),
-                      ),
-                      // Mostrar la imagen desde URL
-                      child: qrUrl.isNotEmpty
-                          ? Image.network(
-                              qrUrl,
-                              width: 260,
-                              height: 260,
-                              fit: BoxFit.contain,
-                              loadingBuilder: (context, child, loadingProgress) {
-                                if (loadingProgress == null) return child;
-                                return const SizedBox(
-                                  width: 260, height: 260,
-                                  child: Center(child: CircularProgressIndicator()),
-                                );
-                              },
-                              errorBuilder: (context, error, stackTrace) => 
-                                const SizedBox(
-                                  width: 260, height: 260,
-                                  child: Center(child: Icon(Icons.broken_image, size: 50, color: Colors.grey)),
-                                ),
-                            )
-                          : const SizedBox(
-                              width: 260, height: 260,
-                              child: Center(child: Text("QR no disponible")),
+              elevation: 0,
+              color: Colors.transparent,
+              child: Column(
+                children: [
+                  // =======================================
+                  // SECCIÓN 1: Tarjeta del QR
+                  // =======================================
+                  Container(
+                    padding: const EdgeInsets.all(22),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(color: Colors.black12),
+                    ),
+                    child: Column(
+                      children: [
+                        qrUrl.isNotEmpty
+                            ? Image.network(
+                                qrUrl,
+                                width: double.infinity,
+                                fit: BoxFit.contain,
+                                loadingBuilder: (context, child, loadingProgress) {
+                                  if (loadingProgress == null) return child;
+                                  return const SizedBox(
+                                    height: 200,
+                                    child: Center(child: CircularProgressIndicator()),
+                                  );
+                                },
+                                errorBuilder: (context, error, stackTrace) => 
+                                  const SizedBox(
+                                    height: 200,
+                                    child: Center(child: Icon(Icons.broken_image, size: 50, color: Colors.grey)),
+                                  ),
+                              )
+                            : const SizedBox(
+                                height: 200,
+                                child: Center(child: Text("QR no disponible")),
+                              ),
+                        
+                        // Botón de descargar debajo del QR
+                        if (qrUrl.isNotEmpty) ...[
+                          const SizedBox(height: 10),
+                          TextButton.icon(
+                            onPressed: _descargando ? null : () => _descargarQR(qrUrl),
+                            icon: _descargando 
+                                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                                : const Icon(Icons.download),
+                            label: Text(_descargando ? 'Descargando...' : 'Descargar QR'),
+                            style: TextButton.styleFrom(
+                              foregroundColor: const Color(0xFF0D6EFD),
                             ),
+                          ),
+                        ]
+                      ],
                     ),
+                  ),
 
-                    const SizedBox(height: 22),
-                    _dato('Monto', 'Bs $monto'),
-                    _dato('Referencia', referencia),
-                    _dato('Estado', estado),
-                    _dato('Sistema', 'Inteligencia Artificial (OCR)'), // Detalle para impresionar al jurado
-                    const SizedBox(height: 18),
+                  const SizedBox(height: 22),
 
-                    // Botón para subir comprobante con efecto de carga
-                    SizedBox(
-                      width: double.infinity,
-                      height: 48,
-                      child: ElevatedButton.icon(
-                        onPressed: _procesando ? null : _escanearComprobante,
-                        icon: _procesando 
-                            ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                            : const Icon(Icons.camera_alt),
-                        label: Text(_procesando ? 'Verificando Comprobante...' : 'Enviar Comprobante'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.green,
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        ),
+                  // =======================================
+                  // SECCIÓN 2: Detalles del Recibo Limpios
+                  // =======================================
+                  _dato('Mes', periodoFormateado), // AQUÍ ESTÁ EL CAMBIO MÁGICO
+                  _dato('Monto', 'Bs $monto'),
+                  _dato('Estado', estado),
+                  
+                  const SizedBox(height: 24),
+
+                  // =======================================
+                  // SECCIÓN 3: Botones de Acción
+                  // =======================================
+                  SizedBox(
+                    width: double.infinity,
+                    height: 52,
+                    child: ElevatedButton.icon(
+                      onPressed: _procesando ? null : _escanearComprobante,
+                      icon: _procesando 
+                          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                          : const Icon(Icons.camera_alt),
+                      label: Text(
+                        _procesando ? 'Verificando Comprobante...' : 'Enviar Comprobante',
+                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF4CAF50), // Verde agradable
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       ),
                     ),
-                    const SizedBox(height: 12),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 48,
-                      child: OutlinedButton.icon(
-                        onPressed: _procesando ? null : () => Navigator.pop(context),
-                        icon: const Icon(Icons.arrow_back),
-                        label: const Text('Cancelar y Volver'),
-                        style: OutlinedButton.styleFrom(
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        ),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 52,
+                    child: OutlinedButton.icon(
+                      onPressed: _procesando ? null : () => Navigator.pop(context),
+                      icon: const Icon(Icons.arrow_back),
+                      label: const Text('Cancelar y Volver', style: TextStyle(fontSize: 16)),
+                      style: OutlinedButton.styleFrom(
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -233,16 +324,16 @@ class _QrPagoScreenState extends State<QrPagoScreen> {
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFFF8F9FA),
+        color: Colors.white,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.black12),
       ),
       child: Row(
         children: [
-          Expanded(child: Text(titulo, style: const TextStyle(color: Colors.black54))),
-          Flexible(child: Text(valor, textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.w700))),
+          Expanded(child: Text(titulo, style: const TextStyle(color: Colors.black54, fontSize: 16))),
+          Flexible(child: Text(valor, textAlign: TextAlign.right, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16))),
         ],
       ),
     );
