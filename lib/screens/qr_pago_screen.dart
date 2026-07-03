@@ -3,7 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
-import 'package:image_gallery_saver/image_gallery_saver.dart';
+import 'package:gal/gal.dart';
 import '../services/socio_service.dart';
 
 class QrPagoScreen extends StatefulWidget {
@@ -48,45 +48,42 @@ class _QrPagoScreenState extends State<QrPagoScreen> {
     }
     return periodo;
   }
-
-  // ==========================================
-  // FUNCIÓN: Descargar QR a la galería
+// ==========================================
+  // NUEVA FUNCIÓN: Descargar QR a la galería
   // ==========================================
   Future<void> _descargarQR(String url) async {
     if (url.isEmpty) return;
     
     setState(() => _descargando = true);
     try {
+      // 1. Descargamos la imagen
       var response = await http.get(Uri.parse(url));
-      final result = await ImageGallerySaver.saveImage(
+      
+      // 2. Usamos el nuevo paquete 'gal' para guardarla en un álbum genial
+      await Gal.putImageBytes(
         Uint8List.fromList(response.bodyBytes),
-        quality: 100,
-        name: "QR_Agua_${widget.idRecibo}",
+        album: "Agua Paraiso", 
       );
 
       if (!mounted) return;
 
-      if (result['isSuccess'] == true) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Row(
-              children: [
-                Icon(Icons.download_done, color: Colors.white),
-                SizedBox(width: 10),
-                Text("QR guardado en tu galería"),
-              ],
-            ),
-            backgroundColor: Colors.green,
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Row(
+            children: [
+              Icon(Icons.download_done, color: Colors.white),
+              SizedBox(width: 10),
+              Text("QR guardado en álbum: Agua Paraiso"),
+            ],
           ),
-        );
-      } else {
-        throw Exception("No se pudo guardar la imagen");
-      }
+          backgroundColor: Colors.green,
+        ),
+      );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text("Error al descargar el QR. Verifica tus permisos."),
+          content: Text("Error al guardar. Revisa los permisos de almacenamiento."),
           backgroundColor: Colors.redAccent,
         ),
       );
